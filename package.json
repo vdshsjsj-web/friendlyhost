@@ -24,7 +24,11 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "ws": "^8.18.3",
-    "zod": "^3.25.76"
+    "zod": "^4.6.6"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
