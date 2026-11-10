@@ -152,7 +152,9 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
-RUN apk upgrade --no-cache
+RUN apk upgrade --no-cache \
+ && apk add --no-cache unzip bash \
+ && (apk add --no-cache openjdk21-jre-headless || apk add --no-cache openjdk17-jre-headless)
 WORKDIR /app
 COPY --from=builder /app ./
 RUN mkdir -p /app/data && chown -R node:node /app
@@ -170,16 +172,13 @@ docker run -p 3000:3000 -v jasfer-data:/app/data --env-file .env jasfer-hosting
 
 Mount `/app/data` so the database and server files survive restarts.
 
-**Java is not bundled.** The Alpine image contains no JRE, so the local provider reports
-`java: not found` in **Admin → Nodes → Test** and server creation refuses with a clear message instead
-of pretending to start. Two supported options:
+**Java is bundled.** The runtime stage installs `openjdk21-jre-headless` (falling back to Java 17) plus
+`bash` for Forge's generated `run.sh` and `unzip` for the Bedrock archive, so the local provider really
+launches `java -jar` processes. Set `JAVA_BIN` to use a different binary.
 
-- **Pterodactyl nodes (recommended):** point `PTERODACTYL_URL` + `PTERODACTYL_APPLICATION_KEY` at your
-  panel and use real Minecraft infrastructure. Nothing else is required in the image.
-- **Local provider in the image:** extend the runtime stage, e.g.
-  `RUN apk add --no-cache openjdk17-jre-headless`, and allow roughly 300–600 MB extra RAM per running
-  server on top of the app itself. A 1 GB app allocation is not enough for a JRE plus a Minecraft
-  server, so run the local provider on a dedicated host (section 3) rather than the web app container.
+Memory still matters: a running Minecraft server needs its `-Xmx` plus roughly 300–600 MB of JVM and OS
+overhead. The node refuses to start a server it cannot fit and reports the available memory, so on a 1 GB
+app allocation use Pterodactyl nodes (or a dedicated host, section 3) rather than the web container.
 
 ## 9. Backups and upgrades
 
@@ -200,7 +199,7 @@ idempotent and additive, so they run safely on boot.
 - [ ] Node **Test** succeeds in Admin → Nodes
 - [ ] Plans reviewed for RAM/CPU/storage limits
 - [ ] `data/` on a persistent volume, backups scheduled
-- [ ] Java runtime installed if using the local provider
+- [ ] Java runtime available (bundled in the image; check Admin → Nodes → Test)
 
 ## Scaling notes
 
