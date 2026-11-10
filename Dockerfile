@@ -2,10 +2,7 @@
 # Node 22 LTS: supported until 2027-04-30 and has prebuilt better-sqlite3 binaries.
 FROM node:22-bookworm-slim
 
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production \
-    PORT=3000 \
-    HOSTNAME=0.0.0.0
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Distributor fixes for the base OS, plus the toolchain needed if a native
 # module has to compile from source.
@@ -26,6 +23,12 @@ RUN npm ci
 
 COPY . .
 RUN npm run build
+
+# Set only after the build: NODE_ENV=production makes `npm ci` skip the
+# devDependencies (typescript, tailwind) that `next build` needs.
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
 
 EXPOSE 3000
 
