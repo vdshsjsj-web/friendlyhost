@@ -134,7 +134,10 @@ function hashPassword(password) {
 }
 
 const adminEmail = (process.env.ADMIN_EMAIL || 'admin@jasfer.host').toLowerCase();
-const adminPassword = process.env.ADMIN_PASSWORD || 'ChangeMe123!';
+// Never fall back to a published default password: generate a random one and
+// print it once so the operator can sign in and change it.
+const generatedAdminPassword = crypto.randomBytes(12).toString('base64url');
+const adminPassword = process.env.ADMIN_PASSWORD || generatedAdminPassword;
 const adminName = process.env.ADMIN_NAME || 'Jasfer Admin';
 const freePlanId = db.prepare('SELECT id FROM plans WHERE slug = ?').get('free')?.id ?? null;
 
@@ -144,7 +147,13 @@ if (!existingAdmin) {
     `INSERT INTO users (id, email, name, password_hash, role, status, plan_id)
      VALUES (?, ?, ?, ?, 'admin', 'active', ?)`
   ).run(`usr_${crypto.randomBytes(8).toString('hex')}`, adminEmail, adminName, hashPassword(adminPassword), freePlanId);
-  console.log(`[seed] created admin ${adminEmail} (change the password after first login)`);
+  console.log(`[seed] created admin ${adminEmail}`);
+  if (adminPassword === generatedAdminPassword) {
+    console.log(`[seed] generated admin password: ${adminPassword}`);
+    console.log('[seed] set ADMIN_PASSWORD to choose your own, and change it after first login');
+  } else {
+    console.log('[seed] password taken from ADMIN_PASSWORD - change it after first login');
+  }
 } else {
   console.log(`[seed] admin ${adminEmail} already exists - left untouched`);
 }
