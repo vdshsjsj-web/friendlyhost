@@ -126,6 +126,8 @@ export type PluginRow = {
   version: string | null;
   source: string;
   file_name: string;
+  /** Folder the file lives in: `plugins` or `mods`. */
+  target: string;
   installed_by: string | null;
   installed_at: string;
 };

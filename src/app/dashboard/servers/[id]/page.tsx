@@ -45,7 +45,7 @@ export default async function ServerDetailPage({ params }: Params) {
       server={publicServer(bundle.server, bundle.plan, bundle.node)}
       plugins={plugins.map((plugin) => ({
         id: plugin.id,
-        projectId: plugin.project_id,
+        projectId: plugin.project_id ?? '',
         name: plugin.name,
         version: plugin.version,
         fileName: plugin.file_name,

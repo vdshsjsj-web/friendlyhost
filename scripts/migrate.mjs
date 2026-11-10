@@ -17,6 +17,20 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.exec(schema);
+
+// Additive column migrations for databases created before a column existed.
+// CREATE TABLE IF NOT EXISTS does not alter existing tables, so patch them here.
+const additiveColumns = [
+  ['server_plugins', 'target', "TEXT NOT NULL DEFAULT 'plugins'"],
+];
+for (const [table, column, definition] of additiveColumns) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
+  if (columns.length > 0 && !columns.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    console.log(`[migrate] added ${table}.${column}`);
+  }
+}
+
 db.prepare(
   `INSERT INTO settings (key, value) VALUES ('schema_version', '1')
    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`

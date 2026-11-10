@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS server_plugins (
   version      TEXT,
   source       TEXT NOT NULL DEFAULT 'modrinth',
   file_name    TEXT NOT NULL,
+  target       TEXT NOT NULL DEFAULT 'plugins',
   installed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   installed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
