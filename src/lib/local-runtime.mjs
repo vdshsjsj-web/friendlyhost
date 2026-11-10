@@ -41,18 +41,91 @@ export function isEnabled() {
   return process.env.JASFER_LOCAL_PROVIDER !== 'false';
 }
 
-export async function javaAvailable() {
-  try {
-    const { stdout } = await execFileAsync(JAVA_BIN, ['-version'], { timeout: 8000 });
-    return { available: true, version: (stdout || '').split('\n')[0] || 'java' };
-  } catch (err) {
+/** Resolves an executable name (or path) against PATH, or null when missing. */
+function resolveOnPath(bin) {
+  if (!bin) return null;
+  if (bin.includes('/')) {
     try {
-      const { stderr } = await execFileAsync(JAVA_BIN, ['-version'], { timeout: 8000 });
-      return { available: true, version: (stderr || '').split('\n')[0] || 'java' };
+      fs.accessSync(bin, fs.constants.X_OK);
+      return bin;
     } catch {
-      return { available: false, version: null, error: err?.message };
+      return null;
     }
   }
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, bin);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      /* keep looking */
+    }
+  }
+  return null;
+}
+
+export function javaInstallHint() {
+  return (
+    'Install a Java 21 runtime on this node (Alpine: apk add --no-cache openjdk21-jre-headless, ' +
+    'Debian/Ubuntu: apt-get install -y openjdk-21-jre-headless), or set JAVA_BIN to an existing java ' +
+    'binary and restart Jasfer. You can also connect a Pterodactyl node in Admin -> Nodes and run the ' +
+    'server there instead.'
+  );
+}
+
+let javaProbe = { at: 0, value: null };
+const JAVA_PROBE_TTL = 60_000;
+
+export async function javaAvailable({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && javaProbe.value && now - javaProbe.at < JAVA_PROBE_TTL) return javaProbe.value;
+
+  let result;
+  // Resolve first: spawning an absent binary only yields an async ENOENT event,
+  // which is what surfaced as "spawn java ENOENT" with no useful context.
+  const resolved = resolveOnPath(JAVA_BIN);
+  if (!resolved) {
+    result = {
+      available: false,
+      binary: JAVA_BIN,
+      version: null,
+      code: 'ENOENT',
+      error: `no executable named "${JAVA_BIN}" on PATH`,
+    };
+  } else {
+    try {
+      // `java -version` prints its banner on stderr and still exits 0.
+      const out = await execFileAsync(resolved, ['-version'], { timeout: 8000 }).catch((err) => {
+        if (err?.stderr || err?.stdout) return { stdout: err.stdout, stderr: err.stderr };
+        throw err;
+      });
+      const banner = `${out.stderr || ''}\n${out.stdout || ''}`
+        .split('\n')
+        .map((line) => line.trim())
+        .find(Boolean);
+      result = { available: true, binary: resolved, version: banner || 'java' };
+    } catch (err) {
+      result = {
+        available: false,
+        binary: resolved,
+        version: null,
+        code: err?.code ?? null,
+        error: err?.message || 'java -version failed',
+      };
+    }
+  }
+  javaProbe = { at: now, value: result };
+  return result;
+}
+
+/** Throws with an actionable message when this node has no usable Java. */
+export async function requireJava() {
+  const java = await javaAvailable();
+  if (!java.available) {
+    throw new Error(`Java is not available on this node (${java.error}). ${javaInstallHint()}`);
+  }
+  return java;
 }
 
 function memoryInfo() {
@@ -296,6 +369,17 @@ export async function provision({ serverId, name, software, version, edition = '
   await fsp.mkdir(path.join(dir, 'plugins'), { recursive: true });
   await fsp.mkdir(path.join(dir, 'mods'), { recursive: true });
 
+  // Fail before downloading hundreds of megabytes when the node cannot run it.
+  if (edition === 'bedrock') {
+    if (!resolveOnPath('unzip')) {
+      throw new Error(
+        'This node is missing "unzip", which is required to extract the Bedrock server archive. Install unzip on the node or use a Pterodactyl node.'
+      );
+    }
+  } else {
+    await requireJava();
+  }
+
   const meta = { name, software, version, edition, ramMb, port, motd, maxPlayers: maxPlayers ?? 20, provisionedAt: new Date().toISOString() };
   await writeMeta(serverId, meta);
   await writeServerProperties(serverId, meta);
@@ -370,6 +454,8 @@ export async function start(serverId) {
   if (!meta) throw new Error('This server has not finished provisioning on the local node yet.');
   entry.meta = meta;
 
+  if (meta.edition !== 'bedrock') await requireJava();
+
   const { availableMb } = memoryInfo();
   const needed = Number(meta.ramMb || 1024);
   if (availableMb < needed + 128) {
@@ -400,8 +486,42 @@ export async function start(serverId) {
   child.stdout.on('data', onData);
   child.stderr.on('data', onData);
 
+  // A missing binary ("spawn java ENOENT") is reported asynchronously through
+  // the "error" event. Wait for the OS to confirm the launch, otherwise the API
+  // answers "starting" and the server sits there behind a raw error string.
+  const launchError = await new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      child.off('spawn', onSpawn);
+      child.off('error', onError);
+      resolve(value);
+    };
+    const onSpawn = () => finish(null);
+    const onError = (err) => finish(err);
+    child.once('spawn', onSpawn);
+    child.once('error', onError);
+    const timer = setTimeout(() => finish(null), 10000);
+    timer.unref?.();
+  });
+
+  if (launchError) {
+    entry.child = null;
+    entry.startedAt = null;
+    const friendly =
+      launchError.code === 'ENOENT'
+        ? `This node could not find "${cmd}" to start the server. ${
+            cmd === JAVA_BIN ? javaInstallHint() : 'Install it on the node and try again.'
+          }`
+        : `Could not launch the server process: ${launchError.message}`;
+    appendLine(entry, `[jasfer] ${friendly}`);
+    setState(entry, 'error', friendly);
+    throw new Error(friendly);
+  }
+
   child.on('error', (err) => {
-    appendLine(entry, `[jasfer] failed to launch process: ${err.message}`);
+    appendLine(entry, `[jasfer] server process error: ${err.message}`);
     setState(entry, 'error', err.message);
     entry.child = null;
   });
