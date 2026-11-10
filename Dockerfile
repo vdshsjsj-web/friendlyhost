@@ -45,9 +45,21 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 # Java 21 is the minimum for Minecraft 1.20.5+ (Paper 1.21 requires it), with
 # Java 17 as a fallback where 21 is unavailable on the base release.
 # bash is needed by Forge's generated run.sh, unzip by the Bedrock archive.
+#
+# The JVM home is read back from the installed binary and pinned to a stable
+# path, so JAVA_HOME stays correct whichever package the fallback selected.
 RUN apk upgrade --no-cache \
  && apk add --no-cache unzip bash \
- && (apk add --no-cache openjdk21-jre-headless || apk add --no-cache openjdk17-jre-headless)
+ && (apk add --no-cache openjdk21-jre-headless || apk add --no-cache openjdk17-jre-headless) \
+ && JVM_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" \
+ && ln -sfn "$JVM_HOME" /usr/lib/jvm/jasfer-java \
+ && test -x /usr/lib/jvm/jasfer-java/bin/java
+
+# Minecraft launchers, Forge's run.sh and the Jasfer launcher resolve the JVM
+# through JAVA_HOME and PATH, so both are exported explicitly instead of
+# relying on the base image's default search path.
+ENV JAVA_HOME=/usr/lib/jvm/jasfer-java \
+    PATH=/usr/lib/jvm/jasfer-java/bin:$PATH
 
 WORKDIR /app
 

@@ -20,7 +20,8 @@ import { resolveSoftware, downloadTo } from './downloads.mjs';
 const execFileAsync = promisify(execFile);
 
 const SERVERS_DIR = path.resolve(process.env.JASFER_SERVERS_DIR || './data/servers');
-const JAVA_BIN = process.env.JAVA_BIN || 'java';
+/** Explicit override; JAVA_HOME and PATH are consulted when it is not set. */
+const JAVA_BIN_OVERRIDE = process.env.JAVA_BIN || null;
 const MAX_BUFFER = 800;
 const HZ = 100;
 
@@ -65,12 +66,34 @@ function resolveOnPath(bin) {
   return null;
 }
 
+/**
+ * Every place the JVM may legitimately live, most specific first: an explicit
+ * JAVA_BIN, then JAVA_HOME/bin/java (what the production image exports), then
+ * whatever "java" resolves to on PATH.
+ */
+function javaCandidates() {
+  const list = [];
+  if (JAVA_BIN_OVERRIDE) list.push(JAVA_BIN_OVERRIDE);
+  if (process.env.JAVA_HOME) list.push(path.join(process.env.JAVA_HOME, 'bin', 'java'));
+  list.push('java');
+  return [...new Set(list)];
+}
+
+/** Absolute path of the JVM the launcher will really execute, or null. */
+export function resolveJava() {
+  for (const candidate of javaCandidates()) {
+    const resolved = resolveOnPath(candidate);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
 export function javaInstallHint() {
   return (
     'Install a Java 21 runtime on this node (Alpine: apk add --no-cache openjdk21-jre-headless, ' +
-    'Debian/Ubuntu: apt-get install -y openjdk-21-jre-headless), or set JAVA_BIN to an existing java ' +
-    'binary and restart Jasfer. You can also connect a Pterodactyl node in Admin -> Nodes and run the ' +
-    'server there instead.'
+    'Debian/Ubuntu: apt-get install -y openjdk-21-jre-headless), export JAVA_HOME to point at that JDK, ' +
+    'or set JAVA_BIN to an existing java binary and restart Jasfer. You can also connect a Pterodactyl ' +
+    'node in Admin -> Nodes and run the server there instead.'
   );
 }
 
@@ -84,14 +107,16 @@ export async function javaAvailable({ force = false } = {}) {
   let result;
   // Resolve first: spawning an absent binary only yields an async ENOENT event,
   // which is what surfaced as "spawn java ENOENT" with no useful context.
-  const resolved = resolveOnPath(JAVA_BIN);
+  const resolved = resolveJava();
+  const tried = javaCandidates().join(', ');
   if (!resolved) {
     result = {
       available: false,
-      binary: JAVA_BIN,
+      binary: null,
       version: null,
+      javaHome: process.env.JAVA_HOME || null,
       code: 'ENOENT',
-      error: `no executable named "${JAVA_BIN}" on PATH`,
+      error: `no executable java found (tried: ${tried})`,
     };
   } else {
     try {
@@ -104,12 +129,18 @@ export async function javaAvailable({ force = false } = {}) {
         .split('\n')
         .map((line) => line.trim())
         .find(Boolean);
-      result = { available: true, binary: resolved, version: banner || 'java' };
+      result = {
+        available: true,
+        binary: resolved,
+        version: banner || 'java',
+        javaHome: path.dirname(path.dirname(resolved)),
+      };
     } catch (err) {
       result = {
         available: false,
         binary: resolved,
         version: null,
+        javaHome: path.dirname(path.dirname(resolved)),
         code: err?.code ?? null,
         error: err?.message || 'java -version failed',
       };
@@ -405,7 +436,8 @@ export async function provision({ serverId, name, software, version, edition = '
 
   if (artifact.installer) {
     // Forge: run the official installer to produce libraries + run scripts.
-    await execFileAsync(JAVA_BIN, ['-jar', jarPath, '--installServer', dir], {
+    const java = await requireJava();
+    await execFileAsync(java.binary, ['-jar', jarPath, '--installServer', dir], {
       cwd: dir,
       timeout: 300000,
       maxBuffer: 8 * 1024 * 1024,
@@ -419,13 +451,28 @@ export async function provision({ serverId, name, software, version, edition = '
   return { ok: true, source: artifact.source, file: artifact.name };
 }
 
+/** Makes the JVM reachable by name for scripts such as Forge's run.sh. */
+function javaEnv(javaBinary) {
+  if (!javaBinary) return {};
+  const binDir = path.dirname(javaBinary);
+  return {
+    JAVA_HOME: path.dirname(binDir),
+    PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+  };
+}
+
 async function buildStartCommand(serverId, meta) {
   const dir = serverDir(serverId);
   if (meta.edition === 'bedrock') {
     return { cmd: path.join(dir, 'bedrock_server'), args: [], env: { LD_LIBRARY_PATH: dir } };
   }
+  // Launch the JVM through its absolute path: the PATH seen by the image, a
+  // service manager or an interactive shell must not change which java runs.
+  const javaBinary = resolveJava();
+  if (!javaBinary) throw new Error(`Java is not available on this node. ${javaInstallHint()}`);
+  const env = javaEnv(javaBinary);
   if (meta.startCommand === 'run.sh') {
-    return { cmd: 'bash', args: ['run.sh', 'nogui'], env: {} };
+    return { cmd: 'bash', args: ['run.sh', 'nogui'], env };
   }
   if (meta.startCommand === 'forge-args') {
     const argsFile = path.join(dir, 'libraries', 'net', 'minecraftforge', 'forge');
@@ -438,10 +485,10 @@ async function buildStartCommand(serverId, meta) {
       /* fall through */
     }
     if (unixArgs) {
-      return { cmd: JAVA_BIN, args: [...javaFlags(meta.ramMb), `@${unixArgs}`, 'nogui'], env: {} };
+      return { cmd: javaBinary, args: [...javaFlags(meta.ramMb), `@${unixArgs}`, 'nogui'], env };
     }
   }
-  return { cmd: JAVA_BIN, args: [...javaFlags(meta.ramMb), '-jar', 'server.jar', 'nogui'], env: {} };
+  return { cmd: javaBinary, args: [...javaFlags(meta.ramMb), '-jar', 'server.jar', 'nogui'], env };
 }
 
 /** Starts the real server process. Throws when the host cannot support it. */
@@ -512,7 +559,7 @@ export async function start(serverId) {
     const friendly =
       launchError.code === 'ENOENT'
         ? `This node could not find "${cmd}" to start the server. ${
-            cmd === JAVA_BIN ? javaInstallHint() : 'Install it on the node and try again.'
+            cmd === 'java' || cmd === resolveJava() ? javaInstallHint() : 'Install it on the node and try again.'
           }`
         : `Could not launch the server process: ${launchError.message}`;
     appendLine(entry, `[jasfer] ${friendly}`);
