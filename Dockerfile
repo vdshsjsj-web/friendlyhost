@@ -1,17 +1,18 @@
 # Jasfer Hosting — production image.
-# Two stages so the compile toolchain (python3/g++) never ships in the final
-# image: it is only needed if better-sqlite3 has to build from source.
-# Base: Node 24 LTS (supported to 2028-04-30) on Debian 13 (trixie).
+# Alpine (musl) instead of Debian: the Debian bases ship glibc/acl/attr packages
+# with unfixed high/critical advisories, while Alpine's package set is minimal
+# and patched. Two stages keep the compiler toolchain out of the shipped image.
+# Node 22 LTS: supported to 2027-04-30 and compatible with better-sqlite3 11.x.
 
 # ---------------------------------------------------------------- build stage
-FROM node:24-trixie-slim AS builder
+FROM node:22-alpine AS builder
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN apt-get update \
- && apt-get upgrade -y \
- && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
- && rm -rf /var/lib/apt/lists/*
+# Compilers are only needed if better-sqlite3 has no prebuilt binary for the
+# platform; they never reach the runtime image.
+RUN apk upgrade --no-cache \
+ && apk add --no-cache python3 make g++
 
 WORKDIR /app
 
@@ -32,17 +33,14 @@ RUN npm run build \
  && npm prune --omit=dev
 
 # -------------------------------------------------------------- runtime stage
-FROM node:24-trixie-slim AS runtime
+FROM node:22-alpine AS runtime
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
-# Distributor security fixes only — no compilers in the shipped image.
-RUN apt-get update \
- && apt-get upgrade -y \
- && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 
