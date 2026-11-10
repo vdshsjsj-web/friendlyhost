@@ -47,7 +47,7 @@ export default async function ServerDetailPage({ params }: Params) {
         id: plugin.id,
         projectId: plugin.project_id ?? '',
         name: plugin.name,
-        version: plugin.version,
+        version: plugin.version ?? '',
         fileName: plugin.file_name,
         target: plugin.target,
         installedAt: plugin.installed_at,
