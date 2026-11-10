@@ -382,7 +382,7 @@ export async function provisionServer(serverId: string): Promise<void> {
       db.prepare(
         `UPDATE servers SET status = 'offline', provider_server_id = ?, ip = ?, status_message = NULL,
          updated_at = datetime('now'), last_status_at = datetime('now') WHERE id = ?`
-      ).run(server.id, server.id, server.ip ?? publicHost(), server.id);
+      ).run(server.id, server.ip ?? publicHost(), server.id);
     } else {
       const client = await pterodactylFor(node);
       const created = await client.createServer({
