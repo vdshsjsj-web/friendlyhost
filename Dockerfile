@@ -40,7 +40,14 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
-RUN apk upgrade --no-cache
+# The local provider launches real `java -jar` processes. Without a JRE the
+# child process failed with "spawn java ENOENT", so the runtime ships one:
+# Java 21 is the minimum for Minecraft 1.20.5+ (Paper 1.21 requires it), with
+# Java 17 as a fallback where 21 is unavailable on the base release.
+# bash is needed by Forge's generated run.sh, unzip by the Bedrock archive.
+RUN apk upgrade --no-cache \
+ && apk add --no-cache unzip bash \
+ && (apk add --no-cache openjdk21-jre-headless || apk add --no-cache openjdk17-jre-headless)
 
 WORKDIR /app
 
