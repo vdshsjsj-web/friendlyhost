@@ -38,10 +38,13 @@ export async function POST(request: Request, { params }: Params) {
     try {
       await provider.power(server, action);
     } catch (error) {
-      throw new ApiError(
-        `The node rejected the ${action} command: ${error instanceof Error ? error.message : 'unknown error'}`,
-        502
+      const message = error instanceof Error ? error.message : 'unknown error';
+      // A missing runtime or exhausted node is a capacity problem, not a
+      // rejected command: report it as unavailable and keep the real cause.
+      const unavailable = /not available on this node|not enough free memory|could not find|ENOENT|is missing/i.test(
+        message
       );
+      throw new ApiError(`The node rejected the ${action} command: ${message}`, unavailable ? 503 : 502);
     }
 
     getDb()
