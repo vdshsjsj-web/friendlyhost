@@ -134,23 +134,52 @@ WantedBy=multi-user.target
 
 ## 8. Docker (optional)
 
+The repository `Dockerfile` is the source of truth. It is a two-stage **Alpine (musl)** build on
+Node 22 LTS: the builder installs `python3 make g++` so `better-sqlite3` can compile, then
+`npm prune --omit=dev` removes the toolchain, and the runtime stage ships only the compiled app plus
+production dependencies, running as the unprivileged `node` user.
+
 ```dockerfile
-FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
-    && rm -rf /var/lib/apt/lists/*
+FROM node:22-alpine AS builder
+RUN apk upgrade --no-cache && apk add --no-cache python3 make g++
 WORKDIR /app
-COPY package*.json ./
+COPY package.json package-lock.json ./
+COPY scripts ./scripts
+COPY src/lib/schema.sql ./src/lib/schema.sql
 RUN npm ci
 COPY . .
-RUN npm run build
-ENV NODE_ENV=production PORT=3000
+RUN npm run build && npm prune --omit=dev
+
+FROM node:22-alpine AS runtime
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
+RUN apk upgrade --no-cache
+WORKDIR /app
+COPY --from=builder /app ./
+RUN mkdir -p /app/data && chown -R node:node /app
+USER node
 EXPOSE 3000
-VOLUME ["/app/data"]
 CMD ["node", "server.js"]
 ```
 
-Mount `/app/data` so the database and server files survive restarts. The JRE is only needed for the
-local provider; drop it if you use Pterodactyl nodes exclusively.
+Build and run:
+
+```bash
+docker build -t jasfer-hosting .
+docker run -p 3000:3000 -v jasfer-data:/app/data --env-file .env jasfer-hosting
+```
+
+Mount `/app/data` so the database and server files survive restarts.
+
+**Java is not bundled.** The Alpine image contains no JRE, so the local provider reports
+`java: not found` in **Admin → Nodes → Test** and server creation refuses with a clear message instead
+of pretending to start. Two supported options:
+
+- **Pterodactyl nodes (recommended):** point `PTERODACTYL_URL` + `PTERODACTYL_APPLICATION_KEY` at your
+  panel and use real Minecraft infrastructure. Nothing else is required in the image.
+- **Local provider in the image:** extend the runtime stage, e.g.
+  `RUN apk add --no-cache openjdk17-jre-headless`, and allow roughly 300–600 MB extra RAM per running
+  server on top of the app itself. A 1 GB app allocation is not enough for a JRE plus a Minecraft
+  server, so run the local provider on a dedicated host (section 3) rather than the web app container.
 
 ## 9. Backups and upgrades
 
