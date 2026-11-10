@@ -152,7 +152,7 @@ export async function PATCH(request: Request) {
         `UPDATE nodes SET status = ?, status_message = ?, last_checked_at = datetime('now') WHERE id = ?`
       ).run(
         result.ok ? 'online' : 'error',
-        result.checks.map((c: { label: string; ok: boolean; detail?: string }) => `${c.label}: ${c.ok ? 'ok' : c.detail ?? 'failed'}`).join(' · '),
+        result.checks.map((c) => `${c.name}: ${c.ok ? 'ok' : c.detail ?? 'failed'}`).join(' · '),
         node.id
       );
       const updated = db.prepare('SELECT * FROM nodes WHERE id = ?').get(node.id) as NodeRow;

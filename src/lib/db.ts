@@ -129,3 +129,6 @@ export type PluginRow = {
   installed_by: string | null;
   installed_at: string;
 };
+
+/** A row of `server_plugins`: a plugin/mod installed into one server. */
+export type ServerPluginRow = PluginRow;
