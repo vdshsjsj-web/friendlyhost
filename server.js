@@ -15,6 +15,7 @@ import Database from 'better-sqlite3';
 import next from 'next';
 import { WebSocketServer } from 'ws';
 import { hashToken, decryptSecret } from './src/lib/crypto.mjs';
+import { ensureDatabase } from './scripts/boot.mjs';
 
 const dev = process.env.NODE_ENV !== 'production';
 const port = Number(process.env.PORT || 3000);
@@ -22,7 +23,9 @@ const hostname = process.env.HOSTNAME || '0.0.0.0';
 
 process.env.NODE_ENV = dev ? 'development' : 'production';
 
-// Fail fast with a clear message when the database was never migrated.
+// Create/migrate/seed the database before anything else touches it.
+ensureDatabase();
+
 const dbPath = process.env.JASFER_DB_PATH || './data/jasfer.db';
 let db;
 try {
